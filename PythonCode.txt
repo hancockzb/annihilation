@@ -1,0 +1,143 @@
+#Python code for range paper
+cd ~/Desktop
+source activate msprime-env
+python3
+
+import numpy as np
+import msprime, pyslim
+import tskit
+import sys
+import matplotlib
+import matplotlib.pyplot as plt
+sys.path.append("/Users/zacharyhancock/Desktop/spgr/plots")
+
+#Load treesequences and check for coalescence
+ts = pyslim.load("demo.trees")
+print(f"The tree sequence has {ts.num_trees} trees on a genome of length {ts.sequence_length},"
+      f" {ts.num_individuals} individuals, {ts.num_samples} 'sample' genomes,"
+      f" and {ts.num_mutations} mutations.")
+for t in np.unique(ts.individual_times):
+  print(f"There are {np.sum(ts.individual_times == t)} individuals from time {t}.")
+for t in [0, 50, 100, 150]:
+   alive = ts.individuals_alive_at(t)
+   print(f"There were {len(alive)} individuals alive {t} time steps in the past.")
+sum([t.num_roots == 1 for t in ts.trees()])
+
+#Recapitate
+recap_ts = ts.recapitate(recombination_rate=1e-8, Ne=2000)
+ts = pyslim.SlimTreeSequence(msprime.mutate(recap_ts, rate=1e-8, keep=True))
+ts.dump("demo_recap.trees")
+ts = pyslim.load("demo_recap.trees")
+print(f"The tree sequence now has {ts.num_trees} trees,"
+	f" and {ts.num_mutations} mutations.")
+
+#Plot individual locations through time
+alive_at_0 = ts.individuals_alive_at(0)
+locs_0 = ts.individual_locations[alive_at_0, :]
+alive_at_50 = ts.individuals_alive_at(50)
+locs_50 = ts.individual_locations[alive_at_50, :]
+alive_at_100 = ts.individuals_alive_at(100)
+locs_100 = ts.individual_locations[alive_at_100, :]
+alive_at_150 = ts.individuals_alive_at(150)
+locs_150 = ts.individual_locations[alive_at_150, :]
+
+groups = {
+	'alive_at_0' : np.random.choice(alive_at_0, size=20),
+	'alive_at_50' : np.random.choice(alive_at_50, size=20),
+	'alive_at_100' : np.random.choice(alive_at_100, size=20),
+	'alive_at_150' : np.random.choice(alive_at_150, size=20)
+	}
+
+for k in groups:
+	print(f"We have {len(groups[k])} individuals in the {k} group")
+
+group_order = ['alive_at_0', 'alive_at_50', 'alive_at_100', 'alive_at_150']
+ind_colors = np.repeat(0, ts.num_individuals)
+for j, k in enumerate(group_order):
+	ind_colors[groups[k]] = 1 + j
+
+fig = plt.figure(figsize=(12, 6), dpi=300)
+ax = fig.add_subplot(221)
+ax.set_title("Today")
+plt.xlim(0,20)
+plt.ylim(0,20)
+ax.scatter(locs_0[:,0], locs_0[:,1], s=20, c=ind_colors[alive_at_0])
+ax = fig.add_subplot(222)
+ax.set_title("50 generations ago")
+ax.scatter(locs_50[:, 0], locs_50[:, 1], s=20, c=ind_colors[alive_at_50])
+plt.xlim(0,20)
+plt.ylim(0,20)
+ax = fig.add_subplot(223)
+ax.set_title("100 generations ago")
+ax.scatter(locs_100[:, 0], locs_100[:, 1], s=20, c=ind_colors[alive_at_100])
+plt.xlim(0,20)
+plt.ylim(0,20)
+ax = fig.add_subplot(224)
+ax.set_title("150 generations ago")
+ax.scatter(locs_150[:, 0], locs_150[:, 1], s=20, c=ind_colors[alive_at_150])
+plt.xlim(0,20)
+plt.ylim(0,20)
+fig.savefig("demo_test.png")
+
+#Calculate diversity for subsets
+A = ts.samples()[alive_at_0]
+B = ts.samples()[alive_at_50]
+C = ts.samples()[alive_at_100]
+D = ts.samples()[alive_at_150]
+
+ts.diversity(sample_sets=[A,B,C,D])
+ts.divergence([A,B,C,D], indexes = [(0,1), (0,2), (0,3)])
+ts.Fst([A,B,C,D], indexes = [(0,1), (0,2), (0,3)])
+ts_A = ts.simplify(A)
+
+#...etc...#
+
+
+def compute_heterozygosity(ts, time, num_targets):
+    alive = ts.individuals_alive_at(time)
+    targets = np.random.choice(np.where(alive)[0], num_targets, replace=False)
+    target_node_list = []
+    new_nodes = []
+    k = 0
+    for ind in targets:
+        target_node_list.extend(ts.individual(ind).nodes)
+        new_nodes.append([k, k+1])
+        k += 2
+    sts = ts.simplify(target_node_list)
+    new_targets = [sts.node(u[0]).individual for u in new_nodes]
+    het = sts.diversity([sts.individual(u).nodes for u in new_targets])
+    locs = ts.individual_locations
+    return (het, targets)
+
+alive = ts.individuals_alive_at(0)
+targets = np.random.choice(alive, size=100, replace=False)
+target_node_list = []
+new_nodes = []
+k = 0
+for ind in targets:
+    target_node_list.extend(ts.individual(ind).nodes)
+    new_nodes.append([k, k+1])
+    k += 2
+
+sts = ts.simplify(target_node_list)
+new_targets = [sts.node(u[0]).individual for u in new_nodes]
+het = sts.diversity([sts.individual(u).nodes for u in new_targets])
+locs = ts.individual_locations
+print(het, targets)
+
+#plot heterozygosity across space
+
+locs = ts.individual_locations
+norm = lambda x: np.sign(x) * np.power(np.abs(x), 0.5)
+scaled_het = 0.5 + norm((het - np.mean(het)) / (4 * max(abs(het - np.mean(het)))))
+print(scaled_het)
+fig = plt.figure(figsize=(12, 12), dpi=300)
+cmap = plt.get_cmap("PRGn")
+ax = fig.add_subplot(111)
+ax.scatter(locs[targets, 0], locs[targets, 1],
+	s=np.power(het + 25, 2),
+	alpha=0.95,
+	color=cmap(scaled_het))
+plt.xlim(0,20)
+plt.ylim(0,20)
+fig.savefig("demo_test2.png")
